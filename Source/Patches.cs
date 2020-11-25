@@ -51,7 +51,7 @@ namespace KanbanStockpile
             if (cell.TryGetKanbanSettings(map, out var ks, out _))
             {
                 Thing t = thingCount.Thing;
-                int limit = (int) (t.def.stackLimit * ks.srt / 100f);
+                int limit = Math.Max(1, (int) (t.def.stackLimit * ks.srt / 100f));
                 countToDrop = t.stackCount > limit ? limit : t.stackCount;
                 return true;
             }
@@ -245,7 +245,7 @@ namespace KanbanStockpile
         {
             if( !storeCell.TryGetKanbanSettings(t.Map, out var ks, out _) ) return true;
 
-            int limit = (int)(t.def.stackLimit * ks.srt / 100f);
+            int limit = Math.Max(1, (int) (t.def.stackLimit * ks.srt / 100f));
             KSLog.Message($"[KanbanStockpile] HaulToCellStorageJob => t.stackCount = {t.stackCount} / limit = {limit}");
             if (t.stackCount > limit)
             {
@@ -294,7 +294,7 @@ namespace KanbanStockpile
             List<Thing> things = map.thingGrid.ThingsListAt(c);
             int numDuplicates = 0;
 
-            int stackLimit = (int) (thing.def.stackLimit * ks.srt / 100f);
+            int stackLimit = Math.Max(1, (int) (thing.def.stackLimit * ks.srt / 100f));
             // TODO #5 consider re-ordering to prevent refilling an accidental/leftover duplicate stack
             // Design Decision: use for loops instead of foreach as they may be faster and similar to this vanilla function
             for (int i = 0; i < things.Count; i++) {
@@ -331,7 +331,7 @@ namespace KanbanStockpile
                     if (!t.CanStackWith(thing)) continue; // skip it if it cannot stack with thing to haul
 
                     // even a partial stack is a dupe so count it regardless
-                    numDuplicates += stackLimit == 0 ? 0 : t.stackCount / stackLimit;
+                    numDuplicates += t.stackCount / stackLimit;
                     if (numDuplicates >= ks.ssl) {
                         KSLog.Message("[KanbanStockpile] NO DON'T HAUL AS THERE IS ALREADY TOO MANY OF THAT KIND OF STACK!");
                         __result = false;
