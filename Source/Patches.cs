@@ -32,6 +32,96 @@ namespace KanbanStockpile
     }
 
     //********************
+    //PickUpAndHaul Patches
+    static class PickUpAndHaul_Patch
+    {
+        public static void ApplyPatch(Harmony harmony)
+        {
+            var unloadFirstThingToil = typeof(PickUpAndHaul.JobDriver_UnloadYourHauledInventory)
+                .GetNestedTypes(BindingFlags.Instance | BindingFlags.NonPublic)
+                .First(t => t.FullName.Contains("c__DisplayClass4_0"))?
+                .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic)
+                .First(x => x.Name.EndsWith("b__0") && x.ReturnType == typeof(void));
+
+            harmony.Patch(unloadFirstThingToil, transpiler: new HarmonyMethod(typeof(PickUpAndHaul_Patch), nameof(PickUpAndHaul_Patch.UnloadYourHauledInventory_MakeNewToils_Transpiler)));
+        }
+
+        static bool CheckKanbanSettings(Map map, IntVec3 cell, ThingCount thingCount, ref int countToDrop)
+        {
+            if (cell.TryGetKanbanSettings(map, out var ks, out _))
+            {
+                Thing t = thingCount.Thing;
+                int limit = (int) (t.def.stackLimit * ks.srt / 100f);
+                countToDrop = t.stackCount > limit ? limit : t.stackCount;
+                return true;
+            }
+            return false;
+        }
+
+        static IEnumerable<CodeInstruction> UnloadYourHauledInventory_MakeNewToils_Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator ilGen)
+        {
+            var setTarget = AccessTools.Method(typeof(Job), nameof(Job.SetTarget));
+
+            var code = instructions.ToList();
+            int idx = -1;
+            int setTargetIdx = 0;
+            for (int i = 0; i < code.Count; i++)
+            {
+                if (code[i].opcode == OpCodes.Callvirt && code[i].operand == setTarget) setTargetIdx++;
+                if (setTargetIdx == 2)
+                {
+                    idx = i + 1;
+                    break;
+                }
+            }
+
+            if (idx == -1)
+            {
+                Log.Error($"[KanbanStockpile] Can't find insertion place");
+                return code;
+            }
+
+            var checkKanbanSettings = AccessTools.Method(typeof(PickUpAndHaul_Patch), nameof(CheckKanbanSettings));
+            var thingMap = AccessTools.PropertyGetter(typeof(Thing), nameof(Thing.Map));
+            var jobDriverPawn = AccessTools.Field(typeof(JobDriver), nameof(JobDriver.pawn));
+            var countToDrop = AccessTools.Field(typeof(PickUpAndHaul.JobDriver_UnloadYourHauledInventory), nameof(PickUpAndHaul.JobDriver_UnloadYourHauledInventory.countToDrop));
+            var nestedThis = AccessTools.TypeByName("PickUpAndHaul.JobDriver_UnloadYourHauledInventory")?
+                .GetNestedTypes(BindingFlags.Instance | BindingFlags.NonPublic)
+                .First(t => t.FullName.Contains("c__DisplayClass4_0"))?
+                .GetFields(BindingFlags.Instance | BindingFlags.Public)
+                .First(x => x.Name.EndsWith("4__this"));
+
+            var continueLabel = ilGen.DefineLabel();
+
+            code[idx].labels.Add(continueLabel);
+            /*
+            this.job.SetTarget(TargetIndex.A, thingCount.Thing);
+			this.job.SetTarget(TargetIndex.B, c);
+
+            >>> if (CheckKanbanSettings(pawn.Map, c, thingCount, ref countToDrop)) return;
+
+            this.countToDrop = thingCount.Thing.stackCount;
+             */
+            code.InsertRange(idx, new[]
+            {
+                new CodeInstruction(OpCodes.Ldarg_0),
+                new CodeInstruction(OpCodes.Ldfld, nestedThis),
+                new CodeInstruction(OpCodes.Ldfld, jobDriverPawn),
+                new CodeInstruction(OpCodes.Callvirt, thingMap),
+                new CodeInstruction(OpCodes.Ldloc_1),
+                new CodeInstruction(OpCodes.Ldloc_0),
+                new CodeInstruction(OpCodes.Ldarg_0),
+                new CodeInstruction(OpCodes.Ldfld, nestedThis),
+                new CodeInstruction(OpCodes.Ldflda, countToDrop),
+                new CodeInstruction(OpCodes.Call, checkKanbanSettings),
+                new CodeInstruction(OpCodes.Brfalse_S, continueLabel),
+                new CodeInstruction(OpCodes.Ret)
+            });
+            return code;
+        }
+    }
+
+    //********************
     //ITab_Storage Patches
     [HarmonyPatch(typeof(ITab_Storage), "TopAreaHeight", MethodType.Getter)]
     static class ITab_Storage_TopAreaHeight_Patch

@@ -17,6 +17,7 @@ namespace KanbanStockpile
     {
         public static bool IsLWMDeepStorageLoaded;
         public static bool IsStockpileRankingLoaded;
+        public static bool IsPickUpAndHaulLoaded;
 
         static KanbanStockpileLoader()
         {
@@ -37,6 +38,15 @@ namespace KanbanStockpile
             } else {
                 IsStockpileRankingLoaded = false;
                 Log.Message("[KanbanStockpile] Did *NOT* detect Uuugggg's StockpileRanking...");
+            }
+
+            if (ModLister.GetActiveModWithIdentifier("Mehni.PickUpAndHaul") != null) {
+                PickUpAndHaul_Patch.ApplyPatch(harmony);
+                IsPickUpAndHaulLoaded = true;
+                Log.Message("[KanbanStockpile] Detected Mehni PickUpAndHaul is loaded!");
+            } else {
+                IsPickUpAndHaulLoaded = false;
+                Log.Message("[KanbanStockpile] Did *NOT* detect Mehni PickUpAndHaul...");
             }
 
 
