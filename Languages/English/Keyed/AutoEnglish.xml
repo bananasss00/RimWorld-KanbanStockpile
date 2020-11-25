@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <LanguageData>
-    <KS.StackRefillThreshold>StackRefillThreshold {0}%</KS.StackRefillThreshold>
+    <KS.StackRefillThreshold>StackCountLimit {0}%</KS.StackRefillThreshold>
     <KS.SimilarStackLimit>SimilarStackLimit {0}</KS.SimilarStackLimit>
     <KS.SimilarStackLimitOff>SimilarStackLimit OFF</KS.SimilarStackLimitOff>
     <KS.Experimental>[Turn off below feature if slower CPU or very large colony]</KS.Experimental>

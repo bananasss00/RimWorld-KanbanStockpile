@@ -13,6 +13,24 @@ using Verse.AI;
 
 namespace KanbanStockpile
 {
+    static class KanbanExtensions
+    {
+        public static bool TryGetKanbanSettings(this IntVec3 cell, Map map, out KanbanSettings ks, out SlotGroup slotGroup)
+        {
+            ks = new KanbanSettings();
+            slotGroup = cell.GetSlotGroup(map);
+            if( slotGroup?.Settings == null ) return false;
+
+            // grab latest configs for this stockpile from our state manager
+            ks = State.Get(slotGroup.Settings.owner.ToString());
+
+            // skip all this stuff now if stockpile is not configured to use at least one feature
+            if (ks.srt == 100 && ks.ssl == 0) return false;
+
+            return true;
+        }
+    }
+
     //********************
     //ITab_Storage Patches
     [HarmonyPatch(typeof(ITab_Storage), "TopAreaHeight", MethodType.Getter)]
@@ -128,13 +146,45 @@ namespace KanbanStockpile
         }
     }
 
+    //********************
+    //HaulAIUtility Patches
+    [HarmonyPatch(typeof(HaulAIUtility), "HaulToCellStorageJob")]
+    public static class HaulToCellStorageJob_Patch
+    {
+        public static bool Prefix(Pawn p, Thing t, IntVec3 storeCell, bool fitInStoreCell, ref Job __result)
+        {
+            if( !storeCell.TryGetKanbanSettings(t.Map, out var ks, out _) ) return true;
+
+            int limit = (int)(t.def.stackLimit * ks.srt / 100f);
+            KSLog.Message($"[KanbanStockpile] HaulToCellStorageJob => t.stackCount = {t.stackCount} / limit = {limit}");
+            if (t.stackCount > limit)
+            {
+                Job job = new Job(JobDefOf.HaulToCell, t, storeCell)
+                {
+                    count = /*t.stackCount - */limit,
+                    haulOpportunisticDuplicates = true,
+                    haulMode = HaulMode.ToCellStorage
+                };
+                __result = job;
+                KSLog.Message($"[KanbanStockpile] dispatch job1, thing={t},cell={storeCell}");
+                return false;
+            }
+
+            Job job2 = new Job(JobDefOf.HaulToCell, t, storeCell);
+            job2.count = t.stackCount;
+            job2.haulOpportunisticDuplicates = false;
+            job2.haulMode = HaulMode.ToCellStorage;
+            __result = job2;
+            KSLog.Message($"[KanbanStockpile] dispatch job2, thing={t},cell={storeCell}");
+            return false;
+        }
+    }
 
     //********************
     //StoreUtility Patches
     [HarmonyPatch(typeof(StoreUtility), "NoStorageBlockersIn")]
     public class StoreUtility_NoStorageBlockersIn_Patch
     {
-        private static FieldInfo ReservationsListInfo = AccessTools.Field(typeof(ReservationManager), "reservations");
         public static void Postfix(ref bool __result, IntVec3 c, Map map, Thing thing)
         {
             // NOTE: Likely LWM Deep Storages Prefix() and Vanilla NoStorageBlockersIn() itself have already run
@@ -145,15 +195,7 @@ namespace KanbanStockpile
             if (__result == false) return;
 
             // make sure we have everything we need to continue
-            SlotGroup slotGroup=c.GetSlotGroup(map);
-            if( (slotGroup == null) || (slotGroup.Settings == null) ) return;
-
-            // grab latest configs for this stockpile from our state manager
-            KanbanSettings ks;
-            ks = State.Get(slotGroup.Settings.owner.ToString());
-
-            // skip all this stuff now if stockpile is not configured to use at least one feature
-            if (ks.srt == 100 && ks.ssl == 0) return;
+            if(!c.TryGetKanbanSettings(map, out var ks, out var slotGroup)) return;
 
             // Assuming JobDefOf.HaulToContainer for Building_Storage vs JobDefOf.HaulToCell otherwise
             bool isContainer = (slotGroup?.parent is Building_Storage);
@@ -162,13 +204,14 @@ namespace KanbanStockpile
             List<Thing> things = map.thingGrid.ThingsListAt(c);
             int numDuplicates = 0;
 
+            int stackLimit = (int) (thing.def.stackLimit * ks.srt / 100f);
             // TODO #5 consider re-ordering to prevent refilling an accidental/leftover duplicate stack
             // Design Decision: use for loops instead of foreach as they may be faster and similar to this vanilla function
             for (int i = 0; i < things.Count; i++) {
                 Thing t = things[i];
                 if (!t.def.EverStorable(false)) continue; // skip non-storable things as they aren't actually *in* the stockpile
                 if (!t.CanStackWith(thing)) continue; // skip it if it cannot stack with thing to haul
-                if (t.stackCount > (t.def.stackLimit * ks.srt / 100f)) continue; // no need to refill until count is below threshold
+                if (t.stackCount >= stackLimit) continue; // no need to refill until count is below threshold
 
                 if (!isContainer) {
                     // pawns are smart enough to grab a partial stack for vanilla cell stockpiles so no need to explicitly check here
@@ -176,7 +219,7 @@ namespace KanbanStockpile
                     KSLog.Message("[KanbanStockpile] YES HAUL PARTIAL STACK OF THING TO TOPOFF STACK IN CELL STOCKPILE!");
                     __result = true;
                     return;
-                } else if (((t.stackCount + thing.stackCount) <= t.def.stackLimit)) {
+                } else if (t.stackCount < stackLimit) {
                     // pawns seem to try to haul a full stack no matter what for HaulToContainer unlike HaulToCell CurJobDef's
                     // so for here when trying to haul to deep storage explicitly ensure stack to haul is partial stack
                     // maybe this is a JobDefOf.HaulToContainer job?
@@ -198,7 +241,7 @@ namespace KanbanStockpile
                     if (!t.CanStackWith(thing)) continue; // skip it if it cannot stack with thing to haul
 
                     // even a partial stack is a dupe so count it regardless
-                    numDuplicates++;
+                    numDuplicates += stackLimit == 0 ? 0 : t.stackCount / stackLimit;
                     if (numDuplicates >= ks.ssl) {
                         KSLog.Message("[KanbanStockpile] NO DON'T HAUL AS THERE IS ALREADY TOO MANY OF THAT KIND OF STACK!");
                         __result = false;
@@ -210,7 +253,7 @@ namespace KanbanStockpile
             // iterate over all outstanding reserved jobs to prevent hauling duplicate similar stacks
             if (KanbanStockpile.Settings.aggressiveSimilarStockpileLimiting == false) return;
             if (map.reservationManager == null) return;
-            var reservations = ReservationsListInfo.GetValue(map.reservationManager) as List<ReservationManager.Reservation>;
+            var reservations = map.reservationManager.reservations;
             if (reservations == null) return;
             ReservationManager.Reservation r;
             for (int i = 0; i < reservations.Count; i++) {
