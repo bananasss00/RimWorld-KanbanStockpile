@@ -328,10 +328,10 @@ namespace KanbanStockpile
                 for (int i = 0; i < things.Count; i++) {
                     Thing t = things[i];
                     if (!t.def.EverStorable(false)) continue; // skip non-storable things as they aren't actually *in* the stockpile
-                    if (!t.CanStackWith(thing)) continue; // skip it if it cannot stack with thing to haul
+                    if (!t.CanStackWith(thing) && t.def != thing.def) continue; // skip it if it cannot stack with thing to haul
 
                     // even a partial stack is a dupe so count it regardless
-                    numDuplicates += t.stackCount / stackLimit;
+                    numDuplicates += Math.Max(1, t.stackCount / stackLimit);
                     if (numDuplicates >= ks.ssl) {
                         KSLog.Message("[KanbanStockpile] NO DON'T HAUL AS THERE IS ALREADY TOO MANY OF THAT KIND OF STACK!");
                         __result = false;

@@ -81,12 +81,10 @@ namespace KanbanStockpile
 
 	public static class KSLog
     {
-        public static bool verbose = false;
+        [System.Diagnostics.Conditional("LOGS")]
         public static void Message(string msg)
         {
-            if (verbose) {
-                Log.Message(msg);
-            }
+            Log.Message(msg);
         }
     }
 }
