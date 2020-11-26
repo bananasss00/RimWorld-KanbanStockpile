@@ -48,14 +48,28 @@ namespace KanbanStockpile
 
         static bool CheckKanbanSettings(Map map, IntVec3 cell, ThingCount thingCount, ref int countToDrop)
         {
-            if (cell.TryGetKanbanSettings(map, out var ks, out _))
-            {
-                Thing t = thingCount.Thing;
-                int limit = Math.Max(1, (int) (t.def.stackLimit * ks.srt / 100f));
-                countToDrop = t.stackCount > limit ? limit : t.stackCount;
+            if(!cell.TryGetKanbanSettings(map, out var ks, out var slotGroup)) return false;
+
+            var thing = thingCount.Thing;
+            int stackLimit = Math.Max(1, (int) (thing.def.stackLimit * ks.srt / 100f));
+            KSLog.Message($"[UnloadHauledInventory] {thing.LabelCap} x{thing.stackCount} / limit = {stackLimit}");
+
+            List<Thing> things = map.thingGrid.ThingsListAt(cell);
+            for (int i = 0; i < things.Count; i++) {
+                Thing t = things[i];
+                if (!t.def.EverStorable(false)) continue; // skip non-storable things as they aren't actually *in* the stockpile
+                if (!t.CanStackWith(thing)) continue; // skip it if it cannot stack with thing to haul
+                if (t.stackCount >= stackLimit) continue; // no need to refill until count is below threshold
+
+                int needMax = stackLimit - t.stackCount;
+                countToDrop = Math.Min(thing.stackCount, needMax);
+                KSLog.Message($"  drop to stack => stack: {t.stackCount}, countToDrop: {countToDrop}");
                 return true;
             }
-            return false;
+
+            countToDrop = thing.stackCount > stackLimit ? stackLimit : thing.stackCount;
+            KSLog.Message($"  drop to empty cell => countToDrop: {countToDrop}");
+            return true;
         }
 
         static IEnumerable<CodeInstruction> UnloadYourHauledInventory_MakeNewToils_Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator ilGen)
@@ -243,29 +257,44 @@ namespace KanbanStockpile
     {
         public static bool Prefix(Pawn p, Thing t, IntVec3 storeCell, bool fitInStoreCell, ref Job __result)
         {
-            if( !storeCell.TryGetKanbanSettings(t.Map, out var ks, out _) ) return true;
+            if(!storeCell.TryGetKanbanSettings(t.Map, out var ks, out var slotGroup)) return true;
 
-            int limit = Math.Max(1, (int) (t.def.stackLimit * ks.srt / 100f));
-            KSLog.Message($"[KanbanStockpile] HaulToCellStorageJob => t.stackCount = {t.stackCount} / limit = {limit}");
-            if (t.stackCount > limit)
+            int stackLimit = Math.Max(1, (int) (t.def.stackLimit * ks.srt / 100f));
+            KSLog.Message($"[UnloadHauledInventory] {t.LabelCap} x{t.stackCount} / limit = {stackLimit}");
+
+            int countToDrop = -1;
+            List<Thing> things = t.Map.thingGrid.ThingsListAt(storeCell);
+            for (int i = 0; i < things.Count; i++) {
+                Thing t2 = things[i];
+                if (!t2.def.EverStorable(false)) continue; // skip non-storable things as they aren't actually *in* the stockpile
+                if (!t2.CanStackWith(t)) continue; // skip it if it cannot stack with thing to haul
+                if (t2.stackCount >= stackLimit) continue; // no need to refill until count is below threshold
+
+                int needMax = stackLimit - t2.stackCount;
+                countToDrop = Math.Min(t.stackCount, needMax);
+                KSLog.Message($"  drop to stack => stack: {t2.stackCount}, countToDrop: {countToDrop}");
+                break;
+            }
+
+            if (countToDrop > 0)
             {
                 Job job = new Job(JobDefOf.HaulToCell, t, storeCell)
                 {
-                    count = /*t.stackCount - */limit,
+                    count = countToDrop,
                     haulOpportunisticDuplicates = true,
                     haulMode = HaulMode.ToCellStorage
                 };
                 __result = job;
-                KSLog.Message($"[KanbanStockpile] dispatch job1, thing={t},cell={storeCell}");
+                KSLog.Message($"  dispatch job1, thing={t},cell={storeCell},countToDrop={countToDrop}");
                 return false;
             }
 
             Job job2 = new Job(JobDefOf.HaulToCell, t, storeCell);
-            job2.count = t.stackCount;
+            job2.count = t.stackCount > stackLimit ? stackLimit : t.stackCount;
             job2.haulOpportunisticDuplicates = false;
             job2.haulMode = HaulMode.ToCellStorage;
             __result = job2;
-            KSLog.Message($"[KanbanStockpile] dispatch job2, thing={t},cell={storeCell}");
+            KSLog.Message($"  dispatch job2(empty cell), thing={t},cell={storeCell},countToDrop={job2.count}");
             return false;
         }
     }
